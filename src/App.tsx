@@ -874,13 +874,15 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
 
 function RefuelingScreen({ flights, followedFlights, reminders, onFollow, onReminder, dutyTime, theme, hideLanded, hideDeparted }: { flights: Flight[]; followedFlights: Set<string>; reminders: Record<string, ReminderMinutes>; onFollow: (flight: Flight) => void; onReminder: (flightId: string, minutes: ReminderMinutes) => void; dutyTime: DutyTime; theme: Theme; hideLanded?: boolean; hideDeparted?: boolean }) {
   const [flightTab, setFlightTab] = useState<FlightTab>('INT')
+  const [direction, setDirection] = useState<FlightDirection>('ARRIVAL')
   const colors = THEME_COLORS[theme]
 
   const filteredByTab = flights.filter(f => {
     const inferredType = f.flightType ?? (f.id.startsWith('d') ? 'DOM' : f.id.startsWith('a') ? 'ADHOC' : 'INT')
     return inferredType === flightTab
   })
-  const filteredByDuty = filterFlightsByDutyTime(filteredByTab, dutyTime)
+  const filteredByDirection = filteredByTab.filter(flight => (flight.direction ?? 'DEPARTURE') === direction)
+  const filteredByDuty = filterFlightsByDutyTime(filteredByDirection, dutyTime)
   const visibleFlights = filteredByDuty.filter(f => {
     if (hideLanded && f.status === 'COMPLETED') return false
     if (hideDeparted && f.status === 'DEPARTED') return false
@@ -929,6 +931,33 @@ function RefuelingScreen({ flights, followedFlights, reminders, onFollow, onRemi
             </button>
           )
         })}
+      </div>
+
+      {/* Arrival and departure selector */}
+      <div className="px-4 pt-3" style={{ background: colors.bg }}>
+        <div className="flex rounded-xl p-1 gap-1" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
+          {(['ARRIVAL', 'DEPARTURE'] as FlightDirection[]).map(option => {
+            const active = direction === option
+            return (
+              <button
+                key={option}
+                onClick={() => setDirection(option)}
+                className="flex-1 py-2 rounded-lg"
+                style={{
+                  background: active ? 'rgba(59,158,221,0.16)' : 'transparent',
+                  border: active ? '1px solid rgba(59,158,221,0.35)' : '1px solid transparent',
+                  color: active ? '#5bb8f5' : colors.textMuted,
+                  fontWeight: 800,
+                  fontSize: '0.68rem',
+                  letterSpacing: '0.1em',
+                  cursor: 'pointer',
+                }}
+              >
+                {option === 'ARRIVAL' ? 'ARRIVALS' : 'DEPARTURES'}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* Flights list */}
