@@ -364,6 +364,14 @@ interface Flight {
   paymentType?: string
   flightType?: FlightTab
   direction?: FlightDirection
+  serviceDate?: string
+}
+
+interface AlertNotification {
+  id: string
+  title: string
+  body: string
+  createdAt: number
 }
 
 const FLIGHTS_ENDPOINT = import.meta.env.PROD ? '/.netlify/functions/flights' : 'https://fis.com.mv/api/flights'
@@ -385,6 +393,7 @@ function normalizeFlights(payload: unknown): Flight[] {
     const flightType: FlightTab = categoryValue.includes('DOMESTIC') ? 'DOM' : categoryValue.includes('ADHOC') ? 'ADHOC' : 'INT'
     const apiStatus = String(flight.status ?? 'PENDING').toUpperCase()
     const status = apiStatus === 'LANDED' || apiStatus === 'ARRIVED' || apiStatus === 'COMPLETED' ? 'COMPLETED' : apiStatus === 'DEPARTED' ? 'DEPARTED' : apiStatus === 'REFUELING' ? 'REFUELING' : 'PENDING'
+    const serviceDate = String(flight.serviceDate ?? flight.flightDate ?? flight.scheduledDate ?? flight.date ?? '')
     return {
       id: String(flight.id ?? flight.flightId ?? flightNo),
       flightNo,
@@ -399,6 +408,7 @@ function normalizeFlights(payload: unknown): Flight[] {
       status,
       flightType,
       direction,
+      serviceDate: serviceDate || undefined,
     }
   })
 }
@@ -450,7 +460,7 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
     const { publicKey } = await keyResponse.json() as { publicKey?: string }
     if (!publicKey) return
     const registration = await navigator.serviceWorker.ready
-    const subscription = await registration.pushManager.subscribe({
+    const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: decodeVapidKey(publicKey),
     })
@@ -466,8 +476,7 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
 
 function filterFlightsByDutyTime(flights: Flight[], dutyTime: DutyTime): Flight[] {
   const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const tomorrow = new Date(today.getTime() + 86400000)
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 
   const parseTime = (timeStr: string): number => {
     const match = timeStr.match(/^(\d{1,2}):(\d{2})$/)
@@ -476,8 +485,15 @@ function filterFlightsByDutyTime(flights: Flight[], dutyTime: DutyTime): Flight[
   }
 
   return flights.filter(flight => {
-    const etaMinutes = parseTime(flight.eta) || parseTime(flight.sta) || -1
-    const stdMinutes = parseTime(flight.std) || -1
+    if (flight.serviceDate) {
+      const date = new Date(flight.serviceDate)
+      if (!Number.isNaN(date.getTime())) {
+        const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+        if (dateKey !== todayKey) return false
+      }
+    }
+    const etaMinutes = parseTime(flight.eta) >= 0 ? parseTime(flight.eta) : parseTime(flight.sta)
+    const stdMinutes = parseTime(flight.std)
 
     if (dutyTime === 'morning') {
       return (etaMinutes >= 7 * 60 && etaMinutes <= 16 * 60 + 30) || (stdMinutes >= 7 * 60 && stdMinutes <= 16 * 60 + 30)
@@ -487,6 +503,35 @@ function filterFlightsByDutyTime(flights: Flight[], dutyTime: DutyTime): Flight[
       return (etaMinutes >= 22 * 60 + 30 || etaMinutes <= 8 * 60 + 30) || (stdMinutes >= 22 * 60 + 30 || stdMinutes <= 8 * 60 + 30)
     }
   })
+}
+
+function readFollowedFlightIds() {
+  try {
+    const value = JSON.parse(localStorage.getItem('followed-flight-ids') ?? '[]')
+    return new Set<string>(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [])
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function readReminders() {
+  try {
+    const value = JSON.parse(localStorage.getItem('flight-reminders') ?? '{}')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value).filter(([, minutes]) => [0, 5, 10, 15, 20].includes(Number(minutes)))) as Record<string, ReminderMinutes>
+  } catch {
+    return {}
+  }
+}
+
+function readAlerts() {
+  try {
+    const value = JSON.parse(localStorage.getItem('flight-alerts') ?? '[]')
+    if (!Array.isArray(value)) return []
+    return value.filter((alert): alert is AlertNotification => Boolean(alert && typeof alert.id === 'string' && typeof alert.title === 'string' && typeof alert.body === 'string' && typeof alert.createdAt === 'number')).slice(0, 50)
+  } catch {
+    return []
+  }
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -1316,14 +1361,7 @@ function SideDrawer({ open, onClose, activeTab, onNav, onSignOut, theme = 'dark'
 
 // ── Tactical Updates Panel ────────────────────────────────────────────────────
 
-function TacticalUpdatesPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem('tactical-update-dismissed') === 'true')
-
-  const dismissUpdate = () => {
-    setDismissed(true)
-    localStorage.setItem('tactical-update-dismissed', 'true')
-  }
-
+function TacticalUpdatesPanel({ open, onClose, notifications, onClear }: { open: boolean; onClose: () => void; notifications: AlertNotification[]; onClear: () => void }) {
   return (
     <>
       <div
@@ -1356,17 +1394,24 @@ function TacticalUpdatesPanel({ open, onClose }: { open: boolean; onClose: () =>
             <IconX size={18} color="#4a5a72" />
           </button>
         </div>
-        {dismissed ? (
+        {notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 rounded-xl" style={{ background: '#1a2540' }}>
             <IconCheck size={40} color="rgba(34,197,94,0.7)" />
-            <p style={{ fontWeight: 600, fontSize: '0.7rem', letterSpacing: '0.2em', color: '#4a5a72', marginTop: '12px' }}>NO NEW UPDATES</p>
+            <p style={{ fontWeight: 600, fontSize: '0.7rem', letterSpacing: '0.2em', color: '#4a5a72', marginTop: '12px' }}>NO ALERTS YET</p>
           </div>
         ) : (
-          <div className="rounded-xl p-4" style={{ background: '#1a2540', border: '1px solid rgba(59,158,221,0.22)' }}>
-            <div style={{ color: '#3b9edd', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.15em', marginBottom: '8px' }}>OPERATIONS NOTICE</div>
-            <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.9rem' }}>Flight operations are being monitored</div>
-            <div style={{ color: '#8899bb', fontSize: '0.76rem', lineHeight: 1.5, marginTop: '6px' }}>Followed-flight changes and duty updates will appear here.</div>
-            <button onClick={dismissUpdate} className="w-full mt-4 py-2 rounded-lg" style={{ background: 'rgba(59,158,221,0.14)', border: '1px solid rgba(59,158,221,0.3)', color: '#5bb8f5', fontWeight: 700, fontSize: '0.7rem', letterSpacing: '0.1em', cursor: 'pointer' }}>DISMISS UPDATE</button>
+          <div>
+            <div className="flex flex-col gap-2" style={{ maxHeight: '52vh', overflowY: 'auto' }}>
+              {notifications.map(notification => (
+                <div key={notification.id} className="rounded-xl p-4" style={{ background: '#1a2540', border: '1px solid rgba(59,158,221,0.22)' }}>
+                  <div style={{ color: '#3b9edd', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.15em', marginBottom: '8px' }}>FLIGHT ALERT</div>
+                  <div style={{ color: '#fff', fontWeight: 700, fontSize: '0.9rem' }}>{notification.title}</div>
+                  <div style={{ color: '#8899bb', fontSize: '0.76rem', lineHeight: 1.5, marginTop: '6px' }}>{notification.body}</div>
+                  <div style={{ color: '#4a5a72', fontSize: '0.65rem', marginTop: '8px' }}>{new Date(notification.createdAt).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+            <button onClick={onClear} className="w-full mt-4 py-2 rounded-lg" style={{ background: 'rgba(59,158,221,0.14)', border: '1px solid rgba(59,158,221,0.3)', color: '#5bb8f5', fontWeight: 700, fontSize: '0.7rem', letterSpacing: '0.1em', cursor: 'pointer' }}>CLEAR ALERTS</button>
           </div>
         )}
       </div>
@@ -1695,14 +1740,9 @@ function Toast({ show, message, onDismiss }: { show: boolean; message: string; o
 function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser }) {
   const [activeTab, setActiveTab] = useState<Tab>('refueling')
   const [flights, setFlights] = useState<Flight[]>([...FLIGHTS_INT, ...FLIGHTS_DOM, ...FLIGHTS_ADHOC])
-  const [followedFlights, setFollowedFlights] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('followed-flight-ids') ?? '[]')) }
-    catch { return new Set() }
-  })
-  const [reminders, setReminders] = useState<Record<string, ReminderMinutes>>(() => {
-    try { return JSON.parse(localStorage.getItem('flight-reminders') ?? '{}') }
-    catch { return {} }
-  })
+  const [followedFlights, setFollowedFlights] = useState<Set<string>>(readFollowedFlightIds)
+  const [reminders, setReminders] = useState<Record<string, ReminderMinutes>>(readReminders)
+  const [notifications, setNotifications] = useState<AlertNotification[]>(readAlerts)
   const followedFlightsRef = useRef(followedFlights)
   const flightsRef = useRef(flights)
   const previousFlightsRef = useRef<Flight[]>([])
@@ -1739,8 +1779,13 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
     localStorage.setItem('selected-duty-time', dutyTime)
     localStorage.setItem('hide-landed-flights', String(hideLanded))
     localStorage.setItem('hide-departed-flights', String(hideDeparted))
+    localStorage.setItem('flight-alerts', JSON.stringify(notifications))
     void syncPushSubscription(followedFlights, reminders)
-  }, [followedFlights, reminders, theme, dutyTime, hideLanded, hideDeparted])
+  }, [followedFlights, reminders, theme, dutyTime, hideLanded, hideDeparted, notifications])
+
+  const addNotification = (title: string, body: string) => {
+    setNotifications(current => [{ id: `${Date.now()}-${Math.random()}`, title, body, createdAt: Date.now() }, ...current].slice(0, 50))
+  }
 
   useEffect(() => {
     const checkReminders = () => {
@@ -1756,6 +1801,7 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
         const key = `${flight.id}:${minutes}:${new Date(eta).toDateString()}`
         if (due && !fired[key]) {
           notifyFlightReminder(flight, minutes)
+          addNotification(minutes === 0 ? `${flight.flightNo} has arrived` : `${flight.flightNo} arrives in ${minutes} minutes`, `${flight.airline} · ETA ${flight.eta}`)
           fired[key] = true
           changed = true
         }
@@ -1778,7 +1824,10 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
           const previousById = new Map(previousFlightsRef.current.map(flight => [flight.id, flight]))
           liveFlights.forEach(flight => {
             const previous = previousById.get(flight.id)
-            if (previous && followedFlightsRef.current.has(flight.id) && (previous.status !== flight.status || previous.eta !== flight.eta || previous.std !== flight.std)) notifyFlightUpdate(flight)
+            if (previous && followedFlightsRef.current.has(flight.id) && (previous.status !== flight.status || previous.eta !== flight.eta || previous.std !== flight.std)) {
+              notifyFlightUpdate(flight)
+              addNotification(`${flight.flightNo} updated`, `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}`)
+            }
           })
           const liveIds = new Set(liveFlights.map(flight => flight.id))
           const preservedFollowed = flightsRef.current.filter(flight => followedFlightsRef.current.has(flight.id) && !liveIds.has(flight.id))
@@ -1896,7 +1945,7 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
 
       {/* Overlays */}
       <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} activeTab={activeTab} onNav={setActiveTab} onSignOut={onSignOut} theme={theme} />
-      <TacticalUpdatesPanel open={tacticalOpen} onClose={() => setTacticalOpen(false)} />
+      <TacticalUpdatesPanel open={tacticalOpen} onClose={() => setTacticalOpen(false)} notifications={notifications} onClear={() => setNotifications([])} />
       <SystemSettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} user={user} dutyTime={dutyTime} setDutyTime={setDutyTime} hideLanded={hideLanded} setHideLanded={setHideLanded} hideDeparted={hideDeparted} setHideDeparted={setHideDeparted} onSignOut={onSignOut} />
       <MoreOptionsSheet open={moreOpen} onClose={() => setMoreOpen(false)} onSettings={() => setSettingsOpen(true)} onSignOut={onSignOut} theme={theme} />
       <Toast show={toast.show} message={toast.message} onDismiss={() => setToast(t => ({ ...t, show: false }))} />

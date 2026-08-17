@@ -1,8 +1,11 @@
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()))
 self.addEventListener('push', event => {
-  const data = event.data?.json?.() ?? { title: 'Fuel Services', body: 'A followed flight has an update.' }
-  event.waitUntil(self.registration.showNotification(data.title, { body: data.body, icon: '/icon.svg', data: { url: data.url ?? '/' } }))
+  let data = { title: 'Fuel Services', body: 'A followed flight has an update.', url: '/' }
+  try {
+    if (event.data) data = { ...data, ...event.data.json() }
+  } catch { /* Ignore malformed payloads and show the fallback notification. */ }
+  event.waitUntil(self.registration.showNotification(data.title, { body: data.body, data: { url: data.url ?? '/' } }))
 })
 self.addEventListener('notificationclick', event => {
   event.notification.close()

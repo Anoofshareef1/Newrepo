@@ -11,6 +11,7 @@ interface Flight {
   eta: string
   std: string
   status: string
+  serviceDate?: string
 }
 
 interface StoredSubscription {
@@ -42,6 +43,7 @@ function normalizeFlights(payload: unknown): Flight[] {
     const isArrival = type.includes('ARR') || flight.isArrival === true || flight.arrival === true
     const apiStatus = String(flight.status ?? 'PENDING').toUpperCase()
     const status = apiStatus === 'LANDED' || apiStatus === 'ARRIVED' || apiStatus === 'COMPLETED' ? 'COMPLETED' : apiStatus === 'DEPARTED' ? 'DEPARTED' : apiStatus === 'REFUELING' ? 'REFUELING' : 'PENDING'
+    const serviceDate = String(flight.serviceDate ?? flight.flightDate ?? flight.scheduledDate ?? flight.date ?? '')
     return {
       id: String(flight.id ?? flight.flightId ?? flightNo),
       flightNo,
@@ -50,6 +52,7 @@ function normalizeFlights(payload: unknown): Flight[] {
       eta: String(flight.estimatedTime ?? flight.eta ?? flight.estimatedArrival ?? '--:--'),
       std: isArrival ? '--:--' : String(flight.scheduledTime ?? flight.std ?? flight.scheduledDeparture ?? '--:--'),
       status,
+      serviceDate: serviceDate || undefined,
     }
   })
 }
@@ -63,15 +66,17 @@ export default async function handler() {
   const response = await fetch('https://fis.com.mv/api/flights')
   if (!response.ok) throw new Error(`Flight API returned ${response.status}`)
   const flights = normalizeFlights(await response.json())
-  if (flights.length === 0) return Response.json({ ok: true, notified: 0 })
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const currentDayFlights = flights.filter(flight => !flight.serviceDate || flight.serviceDate.startsWith(todayKey))
+  if (currentDayFlights.length === 0) return Response.json({ ok: true, notified: 0 })
 
   const store = getStore('flight-push-subscriptions')
   const previous = await store.get('latest-flights', { type: 'json' }) as Flight[] | null
-  await store.setJSON('latest-flights', flights)
+  await store.setJSON('latest-flights', currentDayFlights)
   if (!previous) return Response.json({ ok: true, notified: 0 })
 
   const previousById = new Map(previous.map(flight => [flight.id, flight]))
-  const changedFlights = flights.filter(flight => {
+  const changedFlights = currentDayFlights.filter(flight => {
     const old = previousById.get(flight.id)
     return old && (old.status !== flight.status || old.eta !== flight.eta || old.std !== flight.std)
   })
@@ -81,7 +86,7 @@ export default async function handler() {
     const record = await store.get(blob.key, { type: 'json' }) as StoredSubscription | null
     if (!record) continue
     const firedKeys = new Set(record.firedKeys ?? [])
-    const reminderFlight = flights.find(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
+    const reminderFlight = currentDayFlights.find(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
     const matchingFlight = changedFlights.find(flight => record.flightIds.includes(flight.id))
     const notificationFlight = reminderFlight ?? matchingFlight
     if (!notificationFlight) continue
@@ -89,13 +94,15 @@ export default async function handler() {
       const reminderMinutes = reminderFlight ? Number(record.reminders?.[reminderFlight.id] ?? 0) : null
       const eta = etaTimestamp(notificationFlight.eta)
       const reminderKey = reminderFlight && eta ? `${reminderFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
-      if (reminderKey && firedKeys.has(reminderKey)) continue
+      const updateKey = !reminderFlight && matchingFlight ? `${matchingFlight.id}:update:${matchingFlight.status}:${matchingFlight.eta}:${matchingFlight.std}` : null
+      if ((reminderKey && firedKeys.has(reminderKey)) || (updateKey && firedKeys.has(updateKey))) continue
       await webpush.sendNotification(record.subscription, JSON.stringify({
         title: reminderFlight ? (reminderMinutes === 0 ? `${notificationFlight.flightNo} has arrived` : `${notificationFlight.flightNo} arrives in ${reminderMinutes} minutes`) : `${notificationFlight.flightNo} updated`,
         body: reminderFlight ? `${notificationFlight.airline} · ETA ${notificationFlight.eta}` : `${notificationFlight.status} · ${notificationFlight.eta !== '--:--' ? `ETA ${notificationFlight.eta}` : notificationFlight.route}`,
         url: '/',
       }))
       if (reminderKey) firedKeys.add(reminderKey)
+      if (updateKey) firedKeys.add(updateKey)
       await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys] })
       notified += 1
     } catch (error) {
