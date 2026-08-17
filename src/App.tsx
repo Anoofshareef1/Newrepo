@@ -440,7 +440,9 @@ function etaTimestamp(eta: string) {
 }
 
 function openFlightRadar(flightNo: string) {
-  const searchTerm = flightNo.replace(/\s+/g, '')
+  const compactFlightNo = flightNo.toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const match = compactFlightNo.match(/^([A-Z]{2,3})0*(\d+)([A-Z]?)$/)
+  const searchTerm = match ? `${match[1]}${Number(match[2])}${match[3]}` : compactFlightNo
   window.open(`https://www.flightradar24.com/data/flights/${encodeURIComponent(searchTerm)}`, '_blank', 'noopener,noreferrer')
 }
 
