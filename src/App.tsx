@@ -542,6 +542,16 @@ function readFollowedFlightIds() {
   }
 }
 
+function readFollowedFlights() {
+  try {
+    const value = JSON.parse(localStorage.getItem('followed-flight-data') ?? '[]')
+    if (!Array.isArray(value)) return []
+    return value.filter((flight): flight is Flight => Boolean(flight && typeof flight.id === 'string' && typeof flight.flightNo === 'string' && typeof flight.status === 'string'))
+  } catch {
+    return []
+  }
+}
+
 function readReminders() {
   try {
     const value = JSON.parse(localStorage.getItem('flight-reminders') ?? '{}')
@@ -1776,7 +1786,11 @@ function Toast({ show, message, onDismiss }: { show: boolean; message: string; o
 
 function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser }) {
   const [activeTab, setActiveTab] = useState<Tab>('refueling')
-  const [flights, setFlights] = useState<Flight[]>([...FLIGHTS_INT, ...FLIGHTS_DOM, ...FLIGHTS_ADHOC])
+  const [flights, setFlights] = useState<Flight[]>(() => {
+    const baseFlights = [...FLIGHTS_INT, ...FLIGHTS_DOM, ...FLIGHTS_ADHOC]
+    const cachedFollowed = readFollowedFlights()
+    return [...baseFlights, ...cachedFollowed.filter(flight => !baseFlights.some(baseFlight => baseFlight.id === flight.id))]
+  })
   const [followedFlights, setFollowedFlights] = useState<Set<string>>(readFollowedFlightIds)
   const [reminders, setReminders] = useState<Record<string, ReminderMinutes>>(readReminders)
   const [notifications, setNotifications] = useState<AlertNotification[]>(readAlerts)
@@ -1808,6 +1822,10 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
 
   useEffect(() => { followedFlightsRef.current = followedFlights }, [followedFlights])
   useEffect(() => { flightsRef.current = flights }, [flights])
+
+  useEffect(() => {
+    localStorage.setItem('followed-flight-data', JSON.stringify(flights.filter(flight => followedFlights.has(flight.id))))
+  }, [flights, followedFlights])
 
   useEffect(() => {
     let disposed = false
