@@ -462,7 +462,7 @@ function getFlightStatus(flight: Flight) {
   if (flight.status === 'COMPLETED') return { label: 'LANDED', color: '#60a5fa' }
   const etaMinutes = parseClockMinutes(flight.eta)
   const scheduledMinutes = parseClockMinutes(flight.sta) >= 0 ? parseClockMinutes(flight.sta) : parseClockMinutes(flight.std)
-  if (etaMinutes >= 0 && scheduledMinutes >= 0 && etaMinutes > scheduledMinutes) return { label: 'DELAY', color: '#f59e0b' }
+  if (etaMinutes >= 0 && scheduledMinutes >= 0 && etaMinutes > scheduledMinutes) return { label: `DELAY ${etaMinutes - scheduledMinutes} MIN`, color: '#f59e0b' }
   return { label: 'ON TIME', color: '#22c55e' }
 }
 
