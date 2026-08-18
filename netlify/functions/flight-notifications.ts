@@ -87,12 +87,13 @@ export default async function handler() {
     if (!record) continue
     const firedKeys = new Set(record.firedKeys ?? [])
     let subscriptionRemoved = false
-    const reminderFlight = currentDayFlights.find(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
+    const reminderFlights = currentDayFlights.filter(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
     const matchingFlights = changedFlights.filter(flight => record.flightIds.includes(flight.id))
-    const notificationFlights = reminderFlight ? [reminderFlight] : matchingFlights
+    const reminderIds = new Set(reminderFlights.map(flight => flight.id))
+    const notificationFlights = [...reminderFlights, ...matchingFlights.filter(flight => !reminderIds.has(flight.id))]
     for (const notificationFlight of notificationFlights) {
       try {
-        const isReminder = reminderFlight?.id === notificationFlight.id
+        const isReminder = reminderIds.has(notificationFlight.id)
         const reminderMinutes = isReminder ? Number(record.reminders?.[notificationFlight.id] ?? 0) : null
         const eta = etaTimestamp(notificationFlight.eta)
         const reminderKey = isReminder && eta ? `${notificationFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
