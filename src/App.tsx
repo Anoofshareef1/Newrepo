@@ -413,23 +413,27 @@ function normalizeFlights(payload: unknown): Flight[] {
   })
 }
 
-function requestFlightNotifications(flight: Flight) {
-  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    new Notification(`Following ${flight.flightNo}`, { body: `${flight.airline} · ${flight.route}` })
+function showFlightNotification(title: string, body: string) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  const options = { body, icon: '/icon-192.png', badge: '/icon-192.png' }
+  if ('serviceWorker' in navigator) {
+    void navigator.serviceWorker.ready.then(registration => registration.showNotification(title, options)).catch(() => new Notification(title, options))
+    return
   }
+  new Notification(title, options)
+}
+
+function requestFlightNotifications(flight: Flight) {
+  showFlightNotification(`Following ${flight.flightNo}`, `${flight.airline} · ${flight.route}`)
 }
 
 function notifyFlightUpdate(flight: Flight, previous?: Flight) {
-  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    const etaChanged = previous && previous.eta !== flight.eta
-    new Notification(etaChanged ? `${flight.flightNo} ETA changed` : `${flight.flightNo} updated`, { body: etaChanged ? `${previous.eta} → ${flight.eta}` : `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}` })
-  }
+  const etaChanged = previous && previous.eta !== flight.eta
+  showFlightNotification(etaChanged ? `${flight.flightNo} ETA changed` : `${flight.flightNo} updated`, etaChanged ? `${previous.eta} → ${flight.eta}` : `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}`)
 }
 
 function notifyFlightReminder(flight: Flight, minutes: ReminderMinutes) {
-  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    new Notification(minutes === 0 ? `${flight.flightNo} has arrived` : `${flight.flightNo} arrives in ${minutes} minutes`, { body: `${flight.airline} · ETA ${flight.eta}` })
-  }
+  showFlightNotification(minutes === 0 ? `${flight.flightNo} has arrived` : `${flight.flightNo} arrives in ${minutes} minutes`, `${flight.airline} · ETA ${flight.eta}`)
 }
 
 function etaTimestamp(eta: string) {
@@ -452,6 +456,14 @@ function getEtaColor(flight: Flight, theme: Theme) {
   if (etaMinutes < 0 || scheduledMinutes < 0) return colors.textMuted
   if (etaMinutes < scheduledMinutes) return '#22c55e'
   return etaMinutes > scheduledMinutes ? '#f59e0b' : colors.text
+}
+
+function getFlightStatus(flight: Flight) {
+  if (flight.status === 'COMPLETED') return { label: 'LANDED', color: '#60a5fa' }
+  const etaMinutes = parseClockMinutes(flight.eta)
+  const scheduledMinutes = parseClockMinutes(flight.sta) >= 0 ? parseClockMinutes(flight.sta) : parseClockMinutes(flight.std)
+  if (etaMinutes >= 0 && scheduledMinutes >= 0 && etaMinutes > scheduledMinutes) return { label: 'DELAY', color: '#f59e0b' }
+  return { label: 'ON TIME', color: '#22c55e' }
 }
 
 function openFlightRadar(flightNo: string) {
@@ -481,11 +493,12 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
       userVisibleOnly: true,
       applicationServerKey: decodeVapidKey(publicKey),
     })
-    await fetch('/.netlify/functions/push-subscribe', {
+    const saveResponse = await fetch('/.netlify/functions/push-subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ subscription: subscription.toJSON(), flightIds: [...flightIds], reminders }),
     })
+    if (!saveResponse.ok) throw new Error(`Push subscription save failed: ${saveResponse.status}`)
   } catch (error) {
     console.warn('Push notifications could not be enabled.', error)
   }
@@ -850,6 +863,7 @@ function DashboardScreen() {
 
 function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 'dark' }: { flight: Flight; followed: boolean; reminder?: ReminderMinutes; onFollow: () => void; onReminder?: (minutes: ReminderMinutes) => void; theme?: Theme }) {
   const colors = THEME_COLORS[theme]
+  const flightStatus = getFlightStatus(flight)
   return (
     <div className="rounded-2xl mb-3 overflow-hidden" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
       <div className="p-4 pb-3">
@@ -858,14 +872,22 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
             <span style={{ fontWeight: 800, fontSize: '1.3rem', color: colors.text, letterSpacing: '-0.02em' }}>{flight.flightNo}</span>
             <span style={{ fontSize: '0.7rem', fontWeight: 600, letterSpacing: '0.08em', color: colors.textMuted }}>{flight.airline}</span>
           </div>
-          <button
-            aria-label={followed ? `Stop following ${flight.flightNo}` : `Follow ${flight.flightNo}`}
-            onClick={onFollow}
-            className="flex items-center justify-center rounded-lg"
-            style={{ width: 34, height: 34, background: followed ? 'rgba(59,158,221,0.14)' : colors.surface, border: `1px solid ${colors.border}`, cursor: 'pointer' }}
-          >
-            <IconBell size={16} color={followed ? '#3b9edd' : colors.textMuted} />
-          </button>
+          <div className="flex items-center gap-2">
+            <span
+              aria-label={`${flight.flightNo} status: ${flightStatus.label}`}
+              style={{ background: `${flightStatus.color}1f`, border: `1px solid ${flightStatus.color}66`, borderRadius: '7px', color: flightStatus.color, fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.06em', padding: '5px 7px' }}
+            >
+              {flightStatus.label}
+            </span>
+            <button
+              aria-label={followed ? `Stop following ${flight.flightNo}` : `Follow ${flight.flightNo}`}
+              onClick={onFollow}
+              className="flex items-center justify-center rounded-lg"
+              style={{ width: 34, height: 34, background: followed ? 'rgba(59,158,221,0.14)' : colors.surface, border: `1px solid ${colors.border}`, cursor: 'pointer' }}
+            >
+              <IconBell size={16} color={followed ? '#3b9edd' : colors.textMuted} />
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1">
@@ -1786,6 +1808,21 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
 
   useEffect(() => { followedFlightsRef.current = followedFlights }, [followedFlights])
   useEffect(() => { flightsRef.current = flights }, [flights])
+
+  useEffect(() => {
+    let disposed = false
+    const resyncPush = () => {
+      if (!disposed) void syncPushSubscription(followedFlightsRef.current, reminders)
+    }
+    resyncPush()
+    window.addEventListener('online', resyncPush)
+    document.addEventListener('visibilitychange', resyncPush)
+    return () => {
+      disposed = true
+      window.removeEventListener('online', resyncPush)
+      document.removeEventListener('visibilitychange', resyncPush)
+    }
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('followed-flight-ids', JSON.stringify([...followedFlights]))

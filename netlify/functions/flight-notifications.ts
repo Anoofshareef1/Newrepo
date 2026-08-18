@@ -86,30 +86,38 @@ export default async function handler() {
     const record = await store.get(blob.key, { type: 'json' }) as StoredSubscription | null
     if (!record) continue
     const firedKeys = new Set(record.firedKeys ?? [])
+    let subscriptionRemoved = false
     const reminderFlight = currentDayFlights.find(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
-    const matchingFlight = changedFlights.find(flight => record.flightIds.includes(flight.id))
-    const notificationFlight = reminderFlight ?? matchingFlight
-    if (!notificationFlight) continue
-    try {
-      const reminderMinutes = reminderFlight ? Number(record.reminders?.[reminderFlight.id] ?? 0) : null
-      const eta = etaTimestamp(notificationFlight.eta)
-      const reminderKey = reminderFlight && eta ? `${reminderFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
-      const updateKey = !reminderFlight && matchingFlight ? `${matchingFlight.id}:update:${matchingFlight.status}:${matchingFlight.eta}:${matchingFlight.std}` : null
-      if ((reminderKey && firedKeys.has(reminderKey)) || (updateKey && firedKeys.has(updateKey))) continue
-      const etaChanged = matchingFlight ? previousById.get(matchingFlight.id)?.eta !== matchingFlight.eta : false
-      await webpush.sendNotification(record.subscription, JSON.stringify({
-        title: reminderFlight ? (reminderMinutes === 0 ? `${notificationFlight.flightNo} has arrived` : `${notificationFlight.flightNo} arrives in ${reminderMinutes} minutes`) : etaChanged ? `${notificationFlight.flightNo} ETA changed` : `${notificationFlight.flightNo} updated`,
-        body: reminderFlight ? `${notificationFlight.airline} · ETA ${notificationFlight.eta}` : etaChanged ? `${previousById.get(notificationFlight.id)?.eta} → ${notificationFlight.eta}` : `${notificationFlight.status} · ${notificationFlight.eta !== '--:--' ? `ETA ${notificationFlight.eta}` : notificationFlight.route}`,
-        url: '/',
-      }))
-      if (reminderKey) firedKeys.add(reminderKey)
-      if (updateKey) firedKeys.add(updateKey)
-      await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys] })
-      notified += 1
-    } catch (error) {
-      const statusCode = (error as { statusCode?: number }).statusCode
-      if (statusCode === 404 || statusCode === 410) await store.delete(blob.key)
+    const matchingFlights = changedFlights.filter(flight => record.flightIds.includes(flight.id))
+    const notificationFlights = reminderFlight ? [reminderFlight] : matchingFlights
+    for (const notificationFlight of notificationFlights) {
+      try {
+        const isReminder = reminderFlight?.id === notificationFlight.id
+        const reminderMinutes = isReminder ? Number(record.reminders?.[notificationFlight.id] ?? 0) : null
+        const eta = etaTimestamp(notificationFlight.eta)
+        const reminderKey = isReminder && eta ? `${notificationFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
+        const updateKey = !isReminder ? `${notificationFlight.id}:update:${notificationFlight.status}:${notificationFlight.eta}:${notificationFlight.std}` : null
+        if ((reminderKey && firedKeys.has(reminderKey)) || (updateKey && firedKeys.has(updateKey))) continue
+        const previousFlight = previousById.get(notificationFlight.id)
+        const etaChanged = Boolean(previousFlight && previousFlight.eta !== notificationFlight.eta)
+        await webpush.sendNotification(record.subscription, JSON.stringify({
+          title: isReminder ? (reminderMinutes === 0 ? `${notificationFlight.flightNo} has arrived` : `${notificationFlight.flightNo} arrives in ${reminderMinutes} minutes`) : etaChanged ? `${notificationFlight.flightNo} ETA changed` : `${notificationFlight.flightNo} updated`,
+          body: isReminder ? `${notificationFlight.airline} · ETA ${notificationFlight.eta}` : etaChanged ? `${previousFlight?.eta} → ${notificationFlight.eta}` : `${notificationFlight.status} · ${notificationFlight.eta !== '--:--' ? `ETA ${notificationFlight.eta}` : notificationFlight.route}`,
+          url: '/',
+        }))
+        if (reminderKey) firedKeys.add(reminderKey)
+        if (updateKey) firedKeys.add(updateKey)
+        notified += 1
+      } catch (error) {
+        const statusCode = (error as { statusCode?: number }).statusCode
+        if (statusCode === 404 || statusCode === 410) {
+          await store.delete(blob.key)
+          subscriptionRemoved = true
+          break
+        }
+      }
     }
+    if (notificationFlights.length > 0 && !subscriptionRemoved) await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys] })
   }
   return Response.json({ ok: true, notified })
 }

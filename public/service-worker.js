@@ -5,7 +5,14 @@ self.addEventListener('push', event => {
   try {
     if (event.data) data = { ...data, ...event.data.json() }
   } catch { /* Ignore malformed payloads and show the fallback notification. */ }
-  event.waitUntil(self.registration.showNotification(data.title, { body: data.body, data: { url: data.url ?? '/' } }))
+  event.waitUntil(self.registration.showNotification(data.title, {
+    body: data.body,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: data.tag ?? 'flight-update',
+    renotify: true,
+    data: { url: data.url ?? '/' },
+  }))
 })
 self.addEventListener('notificationclick', event => {
   event.notification.close()
