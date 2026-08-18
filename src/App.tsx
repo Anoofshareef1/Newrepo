@@ -419,9 +419,10 @@ function requestFlightNotifications(flight: Flight) {
   }
 }
 
-function notifyFlightUpdate(flight: Flight) {
+function notifyFlightUpdate(flight: Flight, previous?: Flight) {
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    new Notification(`${flight.flightNo} updated`, { body: `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}` })
+    const etaChanged = previous && previous.eta !== flight.eta
+    new Notification(etaChanged ? `${flight.flightNo} ETA changed` : `${flight.flightNo} updated`, { body: etaChanged ? `${previous.eta} → ${flight.eta}` : `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}` })
   }
 }
 
@@ -437,6 +438,20 @@ function etaTimestamp(eta: string) {
   const date = new Date()
   date.setHours(Number(match[1]), Number(match[2]), 0, 0)
   return date.getTime()
+}
+
+function parseClockMinutes(time: string) {
+  const match = time.match(/^(\d{1,2}):(\d{2})$/)
+  return match ? Number(match[1]) * 60 + Number(match[2]) : -1
+}
+
+function getEtaColor(flight: Flight, theme: Theme) {
+  const colors = THEME_COLORS[theme]
+  const etaMinutes = parseClockMinutes(flight.eta)
+  const scheduledMinutes = parseClockMinutes(flight.sta) >= 0 ? parseClockMinutes(flight.sta) : parseClockMinutes(flight.std)
+  if (etaMinutes < 0 || scheduledMinutes < 0) return colors.textMuted
+  if (etaMinutes < scheduledMinutes) return '#22c55e'
+  return etaMinutes > scheduledMinutes ? '#f59e0b' : colors.text
 }
 
 function openFlightRadar(flightNo: string) {
@@ -479,30 +494,28 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
 function filterFlightsByDutyTime(flights: Flight[], dutyTime: DutyTime): Flight[] {
   const now = new Date()
   const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-
-  const parseTime = (timeStr: string): number => {
-    const match = timeStr.match(/^(\d{1,2}):(\d{2})$/)
-    if (!match) return -1
-    return Number(match[1]) * 60 + Number(match[2])
-  }
+  const followingDay = new Date(now)
+  followingDay.setDate(followingDay.getDate() + 1)
+  const followingDayKey = `${followingDay.getFullYear()}-${String(followingDay.getMonth() + 1).padStart(2, '0')}-${String(followingDay.getDate()).padStart(2, '0')}`
 
   return flights.filter(flight => {
+    const etaMinutes = parseClockMinutes(flight.eta) >= 0 ? parseClockMinutes(flight.eta) : parseClockMinutes(flight.sta)
+    const stdMinutes = parseClockMinutes(flight.std)
+    const isNightStart = etaMinutes >= 22 * 60 + 30 || stdMinutes >= 22 * 60 + 30
+    const isNightEnd = (etaMinutes >= 0 && etaMinutes <= 8 * 60 + 30) || (stdMinutes >= 0 && stdMinutes <= 8 * 60 + 30)
+
     if (flight.serviceDate) {
-      const date = new Date(flight.serviceDate)
-      if (!Number.isNaN(date.getTime())) {
-        const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-        if (dateKey !== todayKey) return false
-      }
+      const dateKey = flight.serviceDate.slice(0, 10)
+      if (dutyTime === 'night') return (dateKey === todayKey && isNightStart) || (dateKey === followingDayKey && isNightEnd)
+      if (dateKey !== todayKey) return false
     }
-    const etaMinutes = parseTime(flight.eta) >= 0 ? parseTime(flight.eta) : parseTime(flight.sta)
-    const stdMinutes = parseTime(flight.std)
 
     if (dutyTime === 'morning') {
       return (etaMinutes >= 7 * 60 && etaMinutes <= 16 * 60 + 30) || (stdMinutes >= 7 * 60 && stdMinutes <= 16 * 60 + 30)
     } else if (dutyTime === 'evening') {
       return (etaMinutes >= 15 * 60 && etaMinutes <= 23 * 60 + 30) || (stdMinutes >= 15 * 60 && stdMinutes <= 23 * 60 + 30)
     } else {
-      return (etaMinutes >= 22 * 60 + 30 || etaMinutes <= 8 * 60 + 30) || (stdMinutes >= 22 * 60 + 30 || stdMinutes <= 8 * 60 + 30)
+      return isNightStart || isNightEnd
     }
   })
 }
@@ -876,12 +889,12 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
       <div className="grid grid-cols-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
         {[
           { label: 'STA', value: flight.sta },
-          { label: 'ETA', value: flight.eta },
+          { label: 'ETA', value: flight.eta, color: getEtaColor(flight, theme) },
           { label: 'STD', value: flight.std, highlight: flight.std !== '--:--' },
         ].map((t, i) => (
           <div key={t.label} className="flex flex-col items-center py-3" style={{ borderRight: i < 2 ? `1px solid ${colors.border}` : 'none' }}>
             <span style={{ fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.12em', color: colors.textMuted }}>{t.label}</span>
-            <span style={{ fontWeight: 700, fontSize: '1rem', color: t.highlight ? '#f59e0b' : colors.textMuted, marginTop: '2px' }}>{t.value}</span>
+            <span style={{ fontWeight: 700, fontSize: '1rem', color: t.color ?? (t.highlight ? '#f59e0b' : colors.textMuted), marginTop: '2px' }}>{t.value}</span>
           </div>
         ))}
       </div>
@@ -1827,8 +1840,9 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
           liveFlights.forEach(flight => {
             const previous = previousById.get(flight.id)
             if (previous && followedFlightsRef.current.has(flight.id) && (previous.status !== flight.status || previous.eta !== flight.eta || previous.std !== flight.std)) {
-              notifyFlightUpdate(flight)
-              addNotification(`${flight.flightNo} updated`, `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}`)
+              const etaChanged = previous.eta !== flight.eta
+              notifyFlightUpdate(flight, previous)
+              addNotification(etaChanged ? `${flight.flightNo} ETA changed` : `${flight.flightNo} updated`, etaChanged ? `${previous.eta} → ${flight.eta}` : `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}`)
             }
           })
           const liveIds = new Set(liveFlights.map(flight => flight.id))

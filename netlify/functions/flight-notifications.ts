@@ -96,9 +96,10 @@ export default async function handler() {
       const reminderKey = reminderFlight && eta ? `${reminderFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
       const updateKey = !reminderFlight && matchingFlight ? `${matchingFlight.id}:update:${matchingFlight.status}:${matchingFlight.eta}:${matchingFlight.std}` : null
       if ((reminderKey && firedKeys.has(reminderKey)) || (updateKey && firedKeys.has(updateKey))) continue
+      const etaChanged = matchingFlight ? previousById.get(matchingFlight.id)?.eta !== matchingFlight.eta : false
       await webpush.sendNotification(record.subscription, JSON.stringify({
-        title: reminderFlight ? (reminderMinutes === 0 ? `${notificationFlight.flightNo} has arrived` : `${notificationFlight.flightNo} arrives in ${reminderMinutes} minutes`) : `${notificationFlight.flightNo} updated`,
-        body: reminderFlight ? `${notificationFlight.airline} · ETA ${notificationFlight.eta}` : `${notificationFlight.status} · ${notificationFlight.eta !== '--:--' ? `ETA ${notificationFlight.eta}` : notificationFlight.route}`,
+        title: reminderFlight ? (reminderMinutes === 0 ? `${notificationFlight.flightNo} has arrived` : `${notificationFlight.flightNo} arrives in ${reminderMinutes} minutes`) : etaChanged ? `${notificationFlight.flightNo} ETA changed` : `${notificationFlight.flightNo} updated`,
+        body: reminderFlight ? `${notificationFlight.airline} · ETA ${notificationFlight.eta}` : etaChanged ? `${previousById.get(notificationFlight.id)?.eta} → ${notificationFlight.eta}` : `${notificationFlight.status} · ${notificationFlight.eta !== '--:--' ? `ETA ${notificationFlight.eta}` : notificationFlight.route}`,
         url: '/',
       }))
       if (reminderKey) firedKeys.add(reminderKey)
