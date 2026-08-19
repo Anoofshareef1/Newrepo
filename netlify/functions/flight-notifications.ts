@@ -60,7 +60,10 @@ function normalizeFlights(payload: unknown): Flight[] {
 export default async function handler() {
   const publicKey = process.env.VAPID_PUBLIC_KEY
   const privateKey = process.env.VAPID_PRIVATE_KEY
-  if (!publicKey || !privateKey) return new Response('Push notifications are not configured', { status: 503 })
+  if (!publicKey || !privateKey) {
+    console.error('Push notifications are not configured: missing VAPID keys')
+    return new Response('Push notifications are not configured', { status: 503 })
+  }
 
   webpush.setVapidDetails(`mailto:${process.env.VAPID_CONTACT_EMAIL ?? 'admin@example.com'}`, publicKey, privateKey)
   const response = await fetch('https://fis.com.mv/api/flights')
@@ -72,8 +75,10 @@ export default async function handler() {
 
   const store = getStore('flight-push-subscriptions')
   const previous = await store.get('latest-flights', { type: 'json' }) as Flight[] | null
-  await store.setJSON('latest-flights', currentDayFlights)
-  if (!previous) return Response.json({ ok: true, notified: 0 })
+  if (!previous) {
+    await store.setJSON('latest-flights', currentDayFlights)
+    return Response.json({ ok: true, notified: 0 })
+  }
 
   const previousById = new Map(previous.map(flight => [flight.id, flight]))
   const changedFlights = currentDayFlights.filter(flight => {
@@ -82,6 +87,7 @@ export default async function handler() {
   })
   const { blobs } = await store.list({ prefix: 'subscription:' })
   let notified = 0
+  let failed = 0
   for (const blob of blobs) {
     const record = await store.get(blob.key, { type: 'json' }) as StoredSubscription | null
     if (!record) continue
@@ -105,7 +111,7 @@ export default async function handler() {
           title: isReminder ? (reminderMinutes === 0 ? `${notificationFlight.flightNo} has arrived` : `${notificationFlight.flightNo} arrives in ${reminderMinutes} minutes`) : etaChanged ? `${notificationFlight.flightNo} ETA changed` : `${notificationFlight.flightNo} updated`,
           body: isReminder ? `${notificationFlight.airline} · ETA ${notificationFlight.eta}` : etaChanged ? `${previousFlight?.eta} → ${notificationFlight.eta}` : `${notificationFlight.status} · ${notificationFlight.eta !== '--:--' ? `ETA ${notificationFlight.eta}` : notificationFlight.route}`,
           url: '/',
-        }))
+        }), { urgency: 'high', TTL: 300 })
         if (reminderKey) firedKeys.add(reminderKey)
         if (updateKey) firedKeys.add(updateKey)
         notified += 1
@@ -116,9 +122,12 @@ export default async function handler() {
           subscriptionRemoved = true
           break
         }
+        failed += 1
+        console.error('Push notification failed', { key: blob.key, statusCode, error })
       }
     }
     if (notificationFlights.length > 0 && !subscriptionRemoved) await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys] })
   }
-  return Response.json({ ok: true, notified })
+  await store.setJSON('latest-flights', currentDayFlights)
+  return Response.json({ ok: failed === 0, changedFlights: changedFlights.length, subscriptions: blobs.length, notified, failed })
 }
