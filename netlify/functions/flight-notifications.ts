@@ -134,12 +134,14 @@ export default async function handler() {
     const notificationFlights = [...reminderFlights, ...matchingFlights.filter(flight => !reminderIds.has(flight.id))]
     for (const notificationFlight of notificationFlights) {
       let notificationId = `${notificationFlight.id}:notification`
+      let reminderKey: string | null = null
+      let updateKey: string | null = null
       try {
         const isReminder = reminderIds.has(notificationFlight.id)
         const reminderMinutes = isReminder ? Number(record.reminders?.[notificationFlight.id] ?? 0) : null
         const eta = etaTimestamp(notificationFlight.eta)
-        const reminderKey = isReminder && eta ? `${notificationFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
-        const updateKey = !isReminder ? `${notificationFlight.id}:update:${notificationFlight.status}:${notificationFlight.eta}:${notificationFlight.std}` : null
+        reminderKey = isReminder && eta ? `${notificationFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
+        updateKey = !isReminder ? `${notificationFlight.id}:update:${notificationFlight.status}:${notificationFlight.eta}:${notificationFlight.std}` : null
         if ((reminderKey && firedKeys.has(reminderKey)) || (updateKey && firedKeys.has(updateKey))) continue
         notificationId = reminderKey ?? updateKey ?? notificationId
         const attemptedAt = new Date().toISOString()
@@ -172,5 +174,6 @@ export default async function handler() {
   }
   if (failed === 0) await store.setJSON('latest-flights', currentDayFlights)
   await store.delete(lockKey)
+  console.log(`Checked ${currentDayFlights.length} flights, ${changedFlights.length} changed, notified ${notified} subscribers, ${failed} failed`)
   return Response.json({ ok: failed === 0, changedFlights: changedFlights.length, subscriptions: blobs.length, notified, failed })
 }
