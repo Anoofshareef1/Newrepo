@@ -489,16 +489,22 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
     const { publicKey } = await keyResponse.json() as { publicKey?: string }
     if (!publicKey) return
     const registration = await navigator.serviceWorker.ready
-    const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: decodeVapidKey(publicKey),
-    })
+    let subscription = await registration.pushManager.getSubscription()
+    if (subscription && localStorage.getItem('vapid-public-key') !== publicKey) {
+      await subscription.unsubscribe()
+      subscription = null
+    }
+    subscription ??= await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: decodeVapidKey(publicKey),
+      })
     const saveResponse = await fetch('/.netlify/functions/push-subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ subscription: subscription.toJSON(), flightIds: [...flightIds], reminders }),
+      body: JSON.stringify({ subscription: subscription.toJSON(), flightIds: [...flightIds], reminders, vapidPublicKey: publicKey }),
     })
     if (!saveResponse.ok) throw new Error(`Push subscription save failed: ${saveResponse.status}`)
+    localStorage.setItem('vapid-public-key', publicKey)
   } catch (error) {
     console.warn('Push notifications could not be enabled.', error)
   }

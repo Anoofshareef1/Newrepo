@@ -19,14 +19,24 @@ interface StoredSubscription {
   flightIds: string[]
   reminders?: Record<string, number>
   firedKeys?: string[]
+  vapidPublicKey?: string
+  delivery?: Record<string, DeliveryState>
+}
+
+interface DeliveryState {
+  attemptedAt: string
+  sentAt?: string
+  failedAt?: string
+  statusCode?: number
+  error?: string
 }
 
 function etaTimestamp(eta: string) {
   const match = eta.match(/^(\d{1,2}):(\d{2})$/)
   if (!match) return Number.isNaN(Date.parse(eta)) ? null : Date.parse(eta)
-  const date = new Date()
-  date.setHours(Number(match[1]), Number(match[2]), 0, 0)
-  return date.getTime()
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Indian/Maldives', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), Number(match[1]), Number(match[2])) - 5 * 60 * 60_000
 }
 
 function normalizeFlights(payload: unknown): Flight[] {
@@ -57,6 +67,15 @@ function normalizeFlights(payload: unknown): Flight[] {
   })
 }
 
+function isValidFlight(flight: Flight) {
+  return Boolean(flight.id && flight.flightNo && flight.eta && flight.std && flight.status)
+}
+
+function getErrorDetails(error: unknown) {
+  const value = error as { statusCode?: number; message?: string }
+  return { statusCode: value.statusCode, message: value.message ?? String(error) }
+}
+
 export default async function handler() {
   const publicKey = process.env.VAPID_PUBLIC_KEY
   const privateKey = process.env.VAPID_PRIVATE_KEY
@@ -69,14 +88,25 @@ export default async function handler() {
   const response = await fetch('https://fis.com.mv/api/flights')
   if (!response.ok) throw new Error(`Flight API returned ${response.status}`)
   const flights = normalizeFlights(await response.json())
-  const todayKey = new Date().toISOString().slice(0, 10)
+  if (flights.length === 0 || flights.some(flight => !isValidFlight(flight))) {
+    console.error('Flight API returned an invalid payload')
+    return Response.json({ ok: false, error: 'Invalid flight API payload' }, { status: 502 })
+  }
+  const todayParts = new Intl.DateTimeFormat('en-US', { timeZone: 'Indian/Maldives', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+  const todayValues = Object.fromEntries(todayParts.map(part => [part.type, part.value]))
+  const todayKey = `${todayValues.year}-${todayValues.month}-${todayValues.day}`
   const currentDayFlights = flights.filter(flight => !flight.serviceDate || flight.serviceDate.startsWith(todayKey))
   if (currentDayFlights.length === 0) return Response.json({ ok: true, notified: 0 })
 
   const store = getStore('flight-push-subscriptions')
+  const lockKey = 'notification-run-lock'
+  const existingLock = await store.get(lockKey, { type: 'json' }) as { expiresAt?: number } | null
+  if (existingLock?.expiresAt && existingLock.expiresAt > Date.now()) return Response.json({ ok: true, skipped: 'already-running' })
+  await store.setJSON(lockKey, { expiresAt: Date.now() + 50_000 })
   const previous = await store.get('latest-flights', { type: 'json' }) as Flight[] | null
   if (!previous) {
     await store.setJSON('latest-flights', currentDayFlights)
+    await store.delete(lockKey)
     return Response.json({ ok: true, notified: 0 })
   }
 
@@ -91,13 +121,19 @@ export default async function handler() {
   for (const blob of blobs) {
     const record = await store.get(blob.key, { type: 'json' }) as StoredSubscription | null
     if (!record) continue
+    if (record.vapidPublicKey && record.vapidPublicKey !== publicKey) {
+      await store.delete(blob.key)
+      continue
+    }
     const firedKeys = new Set(record.firedKeys ?? [])
+    const delivery = { ...(record.delivery ?? {}) }
     let subscriptionRemoved = false
     const reminderFlights = currentDayFlights.filter(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
     const matchingFlights = changedFlights.filter(flight => record.flightIds.includes(flight.id))
     const reminderIds = new Set(reminderFlights.map(flight => flight.id))
     const notificationFlights = [...reminderFlights, ...matchingFlights.filter(flight => !reminderIds.has(flight.id))]
     for (const notificationFlight of notificationFlights) {
+      let notificationId = `${notificationFlight.id}:notification`
       try {
         const isReminder = reminderIds.has(notificationFlight.id)
         const reminderMinutes = isReminder ? Number(record.reminders?.[notificationFlight.id] ?? 0) : null
@@ -105,6 +141,9 @@ export default async function handler() {
         const reminderKey = isReminder && eta ? `${notificationFlight.id}:${reminderMinutes}:${new Date(eta).toDateString()}` : null
         const updateKey = !isReminder ? `${notificationFlight.id}:update:${notificationFlight.status}:${notificationFlight.eta}:${notificationFlight.std}` : null
         if ((reminderKey && firedKeys.has(reminderKey)) || (updateKey && firedKeys.has(updateKey))) continue
+        notificationId = reminderKey ?? updateKey ?? notificationId
+        const attemptedAt = new Date().toISOString()
+        delivery[notificationId] = { attemptedAt }
         const previousFlight = previousById.get(notificationFlight.id)
         const etaChanged = Boolean(previousFlight && previousFlight.eta !== notificationFlight.eta)
         await webpush.sendNotification(record.subscription, JSON.stringify({
@@ -114,9 +153,12 @@ export default async function handler() {
         }), { urgency: 'high', TTL: 300 })
         if (reminderKey) firedKeys.add(reminderKey)
         if (updateKey) firedKeys.add(updateKey)
+        delivery[notificationId] = { attemptedAt, sentAt: new Date().toISOString() }
         notified += 1
       } catch (error) {
-        const statusCode = (error as { statusCode?: number }).statusCode
+        const { statusCode, message } = getErrorDetails(error)
+        const notificationId = reminderKey ?? updateKey ?? `${notificationFlight.id}:notification`
+        delivery[notificationId] = { attemptedAt: delivery[notificationId]?.attemptedAt ?? new Date().toISOString(), failedAt: new Date().toISOString(), statusCode, error: message }
         if (statusCode === 404 || statusCode === 410) {
           await store.delete(blob.key)
           subscriptionRemoved = true
@@ -126,8 +168,9 @@ export default async function handler() {
         console.error('Push notification failed', { key: blob.key, statusCode, error })
       }
     }
-    if (notificationFlights.length > 0 && !subscriptionRemoved) await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys] })
+    if (!subscriptionRemoved) await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys], delivery, vapidPublicKey: publicKey })
   }
-  await store.setJSON('latest-flights', currentDayFlights)
+  if (failed === 0) await store.setJSON('latest-flights', currentDayFlights)
+  await store.delete(lockKey)
   return Response.json({ ok: failed === 0, changedFlights: changedFlights.length, subscriptions: blobs.length, notified, failed })
 }

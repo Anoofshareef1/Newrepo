@@ -4,6 +4,7 @@ interface PushSubscriptionRecord {
   subscription: PushSubscriptionJSON
   flightIds: string[]
   reminders?: Record<string, number>
+  vapidPublicKey?: string
 }
 
 interface PushSubscriptionJSON {
@@ -21,8 +22,16 @@ export default async function handler(request: Request) {
     }
     const key = `subscription:${Buffer.from(body.subscription.endpoint).toString('base64url')}`
     const store = getStore('flight-push-subscriptions')
-    const previous = await store.get(key, { type: 'json' }) as { firedKeys?: string[] } | null
-    await store.setJSON(key, { subscription: body.subscription, flightIds: body.flightIds ?? [], reminders: body.reminders ?? {}, firedKeys: previous?.firedKeys ?? [] })
+    const previous = await store.get(key, { type: 'json' }) as { firedKeys?: string[]; delivery?: Record<string, unknown>; vapidPublicKey?: string } | null
+    const keyChanged = Boolean(previous?.vapidPublicKey && body.vapidPublicKey && previous.vapidPublicKey !== body.vapidPublicKey)
+    await store.setJSON(key, {
+      subscription: body.subscription,
+      flightIds: body.flightIds ?? [],
+      reminders: body.reminders ?? {},
+      vapidPublicKey: body.vapidPublicKey,
+      firedKeys: keyChanged ? [] : previous?.firedKeys ?? [],
+      delivery: keyChanged ? {} : previous?.delivery ?? {},
+    })
     return Response.json({ ok: true })
   } catch {
     return Response.json({ error: 'Unable to save push subscription' }, { status: 400 })
