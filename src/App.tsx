@@ -920,12 +920,6 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
           <span style={{ fontSize: '0.7rem', color: colors.textMuted }}>|</span>
           <span style={{ fontWeight: 600, fontSize: '0.75rem', color: colors.textMuted }}>{flight.route}</span>
         </div>
-        {otherFollowers.length > 0 && (
-          <div className="flex items-center gap-1 mt-2">
-            <IconBell size={11} color="#3b9edd" />
-            <span style={{ fontSize: '0.65rem', color: '#3b9edd', fontWeight: 600 }}>Followed by {otherFollowers.join(', ')}</span>
-          </div>
-        )}
       </div>
       <div style={{ height: '1px', background: colors.border }} />
       <div className="grid grid-cols-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
@@ -941,7 +935,11 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
         ))}
       </div>
       <div className="flex items-center justify-between px-4 py-3">
-        <div />
+        <div>
+          {otherFollowers.length > 0 && (
+            <span style={{ fontSize: '0.65rem', color: '#3b9edd', fontWeight: 600 }}>{otherFollowers.join(', ')}</span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {followed && onReminder && (
             <select
