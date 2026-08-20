@@ -55,7 +55,8 @@ function normalizeFlights(payload: unknown): Flight[] {
     const status = apiStatus === 'LANDED' || apiStatus === 'ARRIVED' || apiStatus === 'COMPLETED' ? 'COMPLETED' : apiStatus === 'DEPARTED' ? 'DEPARTED' : apiStatus === 'REFUELING' ? 'REFUELING' : 'PENDING'
     const serviceDate = String(flight.serviceDate ?? flight.flightDate ?? flight.scheduledDate ?? flight.date ?? '')
     return {
-      id: String(flight.id ?? flight.flightId ?? flightNo),
+      // The upstream id embeds a positional index that shifts as flights complete; use a stable key instead.
+      id: `${isArrival ? 'arrival' : 'departure'}-${flightNo.replace(/\s+/g, '')}-${serviceDate || 'unknown'}`,
       flightNo,
       airline: String(flight.airline ?? flight.airlineCode ?? flight.operator ?? 'UNKNOWN'),
       route,

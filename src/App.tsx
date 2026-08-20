@@ -395,7 +395,8 @@ function normalizeFlights(payload: unknown): Flight[] {
     const status = apiStatus === 'LANDED' || apiStatus === 'ARRIVED' || apiStatus === 'COMPLETED' ? 'COMPLETED' : apiStatus === 'DEPARTED' ? 'DEPARTED' : apiStatus === 'REFUELING' ? 'REFUELING' : 'PENDING'
     const serviceDate = String(flight.serviceDate ?? flight.flightDate ?? flight.scheduledDate ?? flight.date ?? '')
     return {
-      id: String(flight.id ?? flight.flightId ?? flightNo),
+      // The upstream id embeds a positional index that shifts as flights complete; use a stable key instead.
+      id: `${isArrival ? 'arrival' : 'departure'}-${flightNo.replace(/\s+/g, '')}-${serviceDate || 'unknown'}`,
       flightNo,
       airline: String(flight.airline ?? flight.airlineCode ?? flight.operator ?? 'UNKNOWN'),
       aircraftType: String(flight.aircraftType ?? flight.aircraft_type ?? flight.aircraft ?? '---'),
@@ -873,9 +874,10 @@ function DashboardScreen() {
 
 // ── Flight Card ───────────────────────────────────────────────────────────────
 
-function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 'dark' }: { flight: Flight; followed: boolean; reminder?: ReminderMinutes; onFollow: () => void; onReminder?: (minutes: ReminderMinutes) => void; theme?: Theme }) {
+function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 'dark', followers, userName }: { flight: Flight; followed: boolean; reminder?: ReminderMinutes; onFollow: () => void; onReminder?: (minutes: ReminderMinutes) => void; theme?: Theme; followers?: string[]; userName?: string }) {
   const colors = THEME_COLORS[theme]
   const flightStatus = getFlightStatus(flight)
+  const otherFollowers = (followers ?? []).filter(name => name !== userName)
   return (
     <div className="rounded-2xl mb-3 overflow-hidden" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
       <div className="p-4 pb-3">
@@ -918,6 +920,12 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
           <span style={{ fontSize: '0.7rem', color: colors.textMuted }}>|</span>
           <span style={{ fontWeight: 600, fontSize: '0.75rem', color: colors.textMuted }}>{flight.route}</span>
         </div>
+        {otherFollowers.length > 0 && (
+          <div className="flex items-center gap-1 mt-2">
+            <IconBell size={11} color="#3b9edd" />
+            <span style={{ fontSize: '0.65rem', color: '#3b9edd', fontWeight: 600 }}>Followed by {otherFollowers.join(', ')}</span>
+          </div>
+        )}
       </div>
       <div style={{ height: '1px', background: colors.border }} />
       <div className="grid grid-cols-3" style={{ borderBottom: `1px solid ${colors.border}` }}>
@@ -966,7 +974,7 @@ function FlightCard({ flight, followed, reminder, onFollow, onReminder, theme = 
 
 // ── Flight Refueling Screen ───────────────────────────────────────────────────
 
-function RefuelingScreen({ flights, followedFlights, reminders, onFollow, onReminder, dutyTime, theme, hideLanded, hideDeparted }: { flights: Flight[]; followedFlights: Set<string>; reminders: Record<string, ReminderMinutes>; onFollow: (flight: Flight) => void; onReminder: (flightId: string, minutes: ReminderMinutes) => void; dutyTime: DutyTime; theme: Theme; hideLanded?: boolean; hideDeparted?: boolean }) {
+function RefuelingScreen({ flights, followedFlights, reminders, onFollow, onReminder, dutyTime, theme, hideLanded, hideDeparted, followers, userName }: { flights: Flight[]; followedFlights: Set<string>; reminders: Record<string, ReminderMinutes>; onFollow: (flight: Flight) => void; onReminder: (flightId: string, minutes: ReminderMinutes) => void; dutyTime: DutyTime; theme: Theme; hideLanded?: boolean; hideDeparted?: boolean; followers: Record<string, string[]>; userName: string }) {
   const [flightTab, setFlightTab] = useState<FlightTab>('INT')
   const [direction, setDirection] = useState<FlightDirection>('ARRIVAL')
   const colors = THEME_COLORS[theme]
@@ -1066,13 +1074,13 @@ function RefuelingScreen({ flights, followedFlights, reminders, onFollow, onRemi
           </span>
         </div>
         {visibleFlights.length === 0 && <div className="rounded-xl p-5 text-center" style={{ background: colors.surface, color: colors.textMuted }}>No flights available in this category.</div>}
-        {visibleFlights.map(f => <FlightCard key={f.id} flight={f} followed={followedFlights.has(f.id)} reminder={reminders[f.id]} onFollow={() => onFollow(f)} onReminder={minutes => onReminder(f.id, minutes)} theme={theme} />)}
+        {visibleFlights.map(f => <FlightCard key={f.id} flight={f} followed={followedFlights.has(f.id)} reminder={reminders[f.id]} onFollow={() => onFollow(f)} onReminder={minutes => onReminder(f.id, minutes)} theme={theme} followers={followers[f.id]} userName={userName} />)}
       </div>
     </div>
   )
 }
 
-function FollowedFlightsScreen({ flights, followedFlights, reminders, onFollow, onReminder, theme = 'dark' }: { flights: Flight[]; followedFlights: Set<string>; reminders: Record<string, ReminderMinutes>; onFollow: (flight: Flight) => void; onReminder: (flightId: string, minutes: ReminderMinutes) => void; theme?: Theme }) {
+function FollowedFlightsScreen({ flights, followedFlights, reminders, onFollow, onReminder, theme = 'dark', followers, userName }: { flights: Flight[]; followedFlights: Set<string>; reminders: Record<string, ReminderMinutes>; onFollow: (flight: Flight) => void; onReminder: (flightId: string, minutes: ReminderMinutes) => void; theme?: Theme; followers: Record<string, string[]>; userName: string }) {
   const colors = THEME_COLORS[theme]
   const followed = flights.filter(flight => followedFlights.has(flight.id))
 
@@ -1094,7 +1102,7 @@ function FollowedFlightsScreen({ flights, followedFlights, reminders, onFollow, 
           <p style={{ color: colors.textMuted, fontSize: '0.78rem', marginTop: '6px', lineHeight: 1.5 }}>Tap the bell on any flight to add it to your watchlist.</p>
         </div>
       ) : (
-        followed.map(flight => <FlightCard key={flight.id} flight={flight} followed reminder={reminders[flight.id]} onFollow={() => onFollow(flight)} onReminder={minutes => onReminder(flight.id, minutes)} theme={theme} />)
+        followed.map(flight => <FlightCard key={flight.id} flight={flight} followed reminder={reminders[flight.id]} onFollow={() => onFollow(flight)} onReminder={minutes => onReminder(flight.id, minutes)} theme={theme} followers={followers[flight.id]} userName={userName} />)
       )}
     </div>
   )
@@ -1796,6 +1804,7 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
   const [followedFlights, setFollowedFlights] = useState<Set<string>>(readFollowedFlightIds)
   const [reminders, setReminders] = useState<Record<string, ReminderMinutes>>(readReminders)
   const [notifications, setNotifications] = useState<AlertNotification[]>(readAlerts)
+  const [followers, setFollowers] = useState<Record<string, string[]>>({})
   const followedFlightsRef = useRef(followedFlights)
   const flightsRef = useRef(flights)
   const previousFlightsRef = useRef<Flight[]>([])
@@ -1915,6 +1924,22 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    const loadFollowers = async () => {
+      if (flights.length === 0) return
+      try {
+        const response = await fetch(`/.netlify/functions/flight-followers?flightIds=${flights.map(flight => flight.id).join(',')}`)
+        if (!response.ok) return
+        const data = await response.json() as Record<string, string[]>
+        if (!cancelled) setFollowers(data)
+      } catch { /* Keep showing the last known followers. */ }
+    }
+    loadFollowers()
+    const timer = window.setInterval(loadFollowers, 60_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [flights])
+
   const handleFollow = async (flight: Flight) => {
     const isFollowed = followedFlights.has(flight.id)
     if (!isFollowed && typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -1933,6 +1958,17 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
     setFollowedFlights(nextFollowedFlights)
     if (!isFollowed) requestFlightNotifications(flight)
     await syncPushSubscription(nextFollowedFlights)
+    try {
+      const response = await fetch('/.netlify/functions/flight-followers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ flightId: flight.id, userName: user.name, following: !isFollowed }),
+      })
+      if (response.ok) {
+        const { followers: updated } = await response.json() as { followers: string[] }
+        setFollowers(current => ({ ...current, [flight.id]: updated }))
+      }
+    } catch { /* Followers list will refresh on the next periodic fetch. */ }
   }
 
   const handleReminder = (flightId: string, minutes: ReminderMinutes) => {
@@ -1978,8 +2014,8 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
 
       {/* Content */}
       <div style={{ flex: 1, overflow: 'hidden', background: colors.bg }}>
-        {activeTab === 'refueling' && <RefuelingScreen flights={flights} followedFlights={followedFlights} reminders={reminders} onFollow={handleFollow} onReminder={handleReminder} dutyTime={dutyTime} theme={theme} hideLanded={hideLanded} hideDeparted={hideDeparted} />}
-        {activeTab === 'followed' && <FollowedFlightsScreen flights={flights} followedFlights={followedFlights} reminders={reminders} onFollow={handleFollow} onReminder={handleReminder} theme={theme} />}
+        {activeTab === 'refueling' && <RefuelingScreen flights={flights} followedFlights={followedFlights} reminders={reminders} onFollow={handleFollow} onReminder={handleReminder} dutyTime={dutyTime} theme={theme} hideLanded={hideLanded} hideDeparted={hideDeparted} followers={followers} userName={user.name} />}
+        {activeTab === 'followed' && <FollowedFlightsScreen flights={flights} followedFlights={followedFlights} reminders={reminders} onFollow={handleFollow} onReminder={handleReminder} theme={theme} followers={followers} userName={user.name} />}
         {activeTab === 'density' && <DensityMeasureScreen />}
       </div>
 
