@@ -2058,6 +2058,75 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
   )
 }
 
+// ── Update prompt ─────────────────────────────────────────────────────────────
+
+function useAppUpdateAvailable() {
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+  const baselineHtml = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const checkForUpdate = async () => {
+      try {
+        const response = await fetch('/', { cache: 'no-store' })
+        if (!response.ok) return
+        const html = await response.text()
+        if (cancelled) return
+        if (baselineHtml.current === null) baselineHtml.current = html
+        else if (html !== baselineHtml.current) setUpdateAvailable(true)
+      } catch { /* Ignore transient network errors and retry on the next check. */ }
+    }
+    checkForUpdate()
+    const timer = window.setInterval(checkForUpdate, 5 * 60_000)
+    document.addEventListener('visibilitychange', checkForUpdate)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', checkForUpdate)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+    navigator.serviceWorker.addEventListener('controllerchange', () => setUpdateAvailable(true))
+  }, [])
+
+  return updateAvailable
+}
+
+function UpdatePrompt({ show }: { show: boolean }) {
+  return (
+    <div
+      style={{
+        position: 'fixed', top: '16px', left: '16px', right: '16px',
+        background: '#131c2e',
+        border: '1px solid rgba(59,158,221,0.5)',
+        borderRadius: '14px',
+        padding: '14px 16px',
+        display: 'flex', alignItems: 'center', gap: '12px',
+        zIndex: 200,
+        transform: show ? 'translateY(0)' : 'translateY(-40px)',
+        opacity: show ? 1 : 0,
+        transition: 'all 0.3s cubic-bezier(0.4,0,0.2,1)',
+        pointerEvents: show ? 'auto' : 'none',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+      }}
+    >
+      <div className="flex-1">
+        <div style={{ fontWeight: 800, fontSize: '0.7rem', letterSpacing: '0.1em', color: '#3b9edd' }}>UPDATE AVAILABLE</div>
+        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff' }}>A new version is ready. Reload to get the latest fixes.</div>
+      </div>
+      <button
+        onClick={() => window.location.reload()}
+        className="px-3 py-2 rounded-lg"
+        style={{ background: '#3b9edd', color: '#fff', border: 'none', fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.06em', cursor: 'pointer', flexShrink: 0 }}
+      >
+        RELOAD
+      </button>
+    </div>
+  )
+}
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -2065,8 +2134,14 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('auth-user') ?? 'null') as StaffUser | null }
     catch { return null }
   })
+  const updateAvailable = useAppUpdateAvailable()
 
-  return user === null
-    ? <LoginScreen onLogin={authenticatedUser => { setUser(authenticatedUser); localStorage.setItem('auth-user', JSON.stringify(authenticatedUser)) }} />
-    : <AppShell user={user} onSignOut={() => { setUser(null); localStorage.removeItem('auth-user') }} />
+  return (
+    <>
+      {user === null
+        ? <LoginScreen onLogin={authenticatedUser => { setUser(authenticatedUser); localStorage.setItem('auth-user', JSON.stringify(authenticatedUser)) }} />
+        : <AppShell user={user} onSignOut={() => { setUser(null); localStorage.removeItem('auth-user') }} />}
+      <UpdatePrompt show={updateAvailable} />
+    </>
+  )
 }
