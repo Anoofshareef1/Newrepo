@@ -22,3 +22,26 @@ self.addEventListener('notificationclick', event => {
     return self.clients.openWindow(event.notification.data?.url ?? '/')
   }))
 })
+
+// Browsers can invalidate a push subscription in the background; resubscribe without needing the app open.
+self.addEventListener('pushsubscriptionchange', event => {
+  event.waitUntil((async () => {
+    try {
+      const cache = await caches.open('push-subscription-meta')
+      const metaResponse = await cache.match('/push-subscription-meta')
+      const meta = metaResponse ? await metaResponse.json() : null
+      const applicationServerKey = event.oldSubscription?.options?.applicationServerKey ?? meta?.applicationServerKey
+      const subscription = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
+      await fetch('/.netlify/functions/push-subscribe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          flightIds: meta?.flightIds ?? [],
+          reminders: meta?.reminders ?? {},
+          vapidPublicKey: meta?.vapidPublicKey,
+        }),
+      })
+    } catch { /* Nothing else to do until the app is reopened and resyncs. */ }
+  })())
+})

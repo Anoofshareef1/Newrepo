@@ -427,14 +427,7 @@ function requestFlightNotifications(flight: Flight) {
   showFlightNotification(`Following ${flight.flightNo}`, `${flight.airline} · ${flight.route}`)
 }
 
-function notifyFlightUpdate(flight: Flight, previous?: Flight) {
-  const etaChanged = previous && previous.eta !== flight.eta
-  showFlightNotification(etaChanged ? `${flight.flightNo} ETA changed` : `${flight.flightNo} updated`, etaChanged ? `${previous.eta} → ${flight.eta}` : `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}`)
-}
-
-function notifyFlightReminder(flight: Flight, minutes: ReminderMinutes) {
-  showFlightNotification(minutes === 0 ? `${flight.flightNo} has arrived` : `${flight.flightNo} arrives in ${minutes} minutes`, `${flight.airline} · ETA ${flight.eta}`)
-}
+// Native OS notifications for updates/reminders are delivered by push (see flight-notifications.ts); these only add to the in-app list.
 
 function etaTimestamp(eta: string) {
   const match = eta.match(/^(\d{1,2}):(\d{2})$/)
@@ -505,6 +498,9 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
     })
     if (!saveResponse.ok) throw new Error(`Push subscription save failed: ${saveResponse.status}`)
     localStorage.setItem('vapid-public-key', publicKey)
+    const meta = new Response(JSON.stringify({ flightIds: [...flightIds], reminders, vapidPublicKey: publicKey }))
+    const cache = await caches.open('push-subscription-meta')
+    await cache.put('/push-subscription-meta', meta)
   } catch (error) {
     console.warn('Push notifications could not be enabled.', error)
   }
@@ -1876,7 +1872,6 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
         const due = minutes === 0 ? now >= eta : now >= eta - minutes * 60_000
         const key = `${flight.id}:${minutes}:${new Date(eta).toDateString()}`
         if (due && !fired[key]) {
-          notifyFlightReminder(flight, minutes)
           addNotification(minutes === 0 ? `${flight.flightNo} has arrived` : `${flight.flightNo} arrives in ${minutes} minutes`, `${flight.airline} · ETA ${flight.eta}`)
           fired[key] = true
           changed = true
@@ -1902,7 +1897,6 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
             const previous = previousById.get(flight.id)
             if (previous && followedFlightsRef.current.has(flight.id) && (previous.status !== flight.status || previous.eta !== flight.eta || previous.std !== flight.std)) {
               const etaChanged = previous.eta !== flight.eta
-              notifyFlightUpdate(flight, previous)
               addNotification(etaChanged ? `${flight.flightNo} ETA changed` : `${flight.flightNo} updated`, etaChanged ? `${previous.eta} → ${flight.eta}` : `${flight.status} · ${flight.eta !== '--:--' ? `ETA ${flight.eta}` : flight.route}`)
             }
           })

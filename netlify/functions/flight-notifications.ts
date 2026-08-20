@@ -116,6 +116,7 @@ export default async function handler() {
     return old && (old.status !== flight.status || old.eta !== flight.eta || old.std !== flight.std)
   })
   const { blobs } = await store.list({ prefix: 'subscription:' })
+  console.log(`Subscriptions: ${blobs.length}, changed flight ids: ${changedFlights.map(flight => flight.id).join(', ') || 'none'}`)
   let notified = 0
   let failed = 0
   for (const blob of blobs) {
@@ -132,6 +133,9 @@ export default async function handler() {
     const matchingFlights = changedFlights.filter(flight => record.flightIds.includes(flight.id))
     const reminderIds = new Set(reminderFlights.map(flight => flight.id))
     const notificationFlights = [...reminderFlights, ...matchingFlights.filter(flight => !reminderIds.has(flight.id))]
+    if (changedFlights.length > 0) {
+      console.log(`Subscription ${blob.key}: flightIds=${record.flightIds.join(', ') || 'none'}, matching=${matchingFlights.length}, firedKeys=${[...firedKeys].join(', ') || 'none'}`)
+    }
     for (const notificationFlight of notificationFlights) {
       let notificationId = `${notificationFlight.id}:notification`
       let reminderKey: string | null = null
