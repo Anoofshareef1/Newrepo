@@ -13,6 +13,13 @@ interface PushSubscriptionJSON {
   keys?: { p256dh: string; auth: string }
 }
 
+function normalizeStoredFlightId(id: string) {
+  if (!id) return id
+  const legacyMatch = id.match(/^(arrival|departure)-(.+)-([0-9]{4}-[0-9]{2}-[0-9]{2})-\d+$/i)
+  if (legacyMatch) return `${legacyMatch[1].toLowerCase()}-${legacyMatch[2].replace(/\s+/g, '')}-${legacyMatch[3]}`
+  return id
+}
+
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 })
   try {
@@ -24,10 +31,12 @@ export default async function handler(request: Request) {
     const store = getStore('flight-push-subscriptions')
     const previous = await store.get(key, { type: 'json' }) as { firedKeys?: string[]; delivery?: Record<string, unknown>; vapidPublicKey?: string } | null
     const keyChanged = Boolean(previous?.vapidPublicKey && body.vapidPublicKey && previous.vapidPublicKey !== body.vapidPublicKey)
+    const normalizedFlightIds = [...new Set((body.flightIds ?? []).map(id => normalizeStoredFlightId(String(id))))]
+    const normalizedReminders = Object.fromEntries(Object.entries(body.reminders ?? {}).map(([flightId, minutes]) => [normalizeStoredFlightId(String(flightId)), Number(minutes)]))
     await store.setJSON(key, {
       subscription: body.subscription,
-      flightIds: body.flightIds ?? [],
-      reminders: body.reminders ?? {},
+      flightIds: normalizedFlightIds,
+      reminders: normalizedReminders,
       vapidPublicKey: body.vapidPublicKey,
       firedKeys: keyChanged ? [] : previous?.firedKeys ?? [],
       delivery: keyChanged ? {} : previous?.delivery ?? {},

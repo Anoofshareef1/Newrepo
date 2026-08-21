@@ -39,6 +39,17 @@ function etaTimestamp(eta: string) {
   return Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), Number(match[1]), Number(match[2])) - 5 * 60 * 60_000
 }
 
+function buildFlightId(flightNo: string, isArrival: boolean, serviceDate: string) {
+  return `${isArrival ? 'arrival' : 'departure'}-${flightNo.replace(/\s+/g, '')}-${serviceDate || 'unknown'}`
+}
+
+function normalizeStoredFlightId(id: string) {
+  if (!id) return id
+  const legacyMatch = id.match(/^(arrival|departure)-(.+)-([0-9]{4}-[0-9]{2}-[0-9]{2})-\d+$/i)
+  if (legacyMatch) return `${legacyMatch[1].toLowerCase()}-${legacyMatch[2].replace(/\s+/g, '')}-${legacyMatch[3]}`
+  return id
+}
+
 function normalizeFlights(payload: unknown): Flight[] {
   const value = payload as { flights?: unknown[]; data?: unknown[] } | unknown[]
   const source = Array.isArray(value) ? value : value?.flights ?? value?.data
@@ -56,7 +67,7 @@ function normalizeFlights(payload: unknown): Flight[] {
     const serviceDate = String(flight.serviceDate ?? flight.flightDate ?? flight.scheduledDate ?? flight.date ?? '')
     return {
       // The upstream id embeds a positional index that shifts as flights complete; use a stable key instead.
-      id: `${isArrival ? 'arrival' : 'departure'}-${flightNo.replace(/\s+/g, '')}-${serviceDate || 'unknown'}`,
+      id: buildFlightId(flightNo, isArrival, serviceDate),
       flightNo,
       airline: String(flight.airline ?? flight.airlineCode ?? flight.operator ?? 'UNKNOWN'),
       route,
@@ -127,15 +138,21 @@ export default async function handler() {
       await store.delete(blob.key)
       continue
     }
+    const canonicalFlightIds = [...new Set((record.flightIds ?? []).map(id => normalizeStoredFlightId(String(id))))]
+    const canonicalReminders = Object.fromEntries(Object.entries(record.reminders ?? {}).map(([flightId, minutes]) => [normalizeStoredFlightId(String(flightId)), Number(minutes)]))
+    const normalizedRecord = { ...record, flightIds: canonicalFlightIds, reminders: canonicalReminders }
+    if (JSON.stringify(normalizedRecord.flightIds) !== JSON.stringify(record.flightIds) || JSON.stringify(normalizedRecord.reminders ?? {}) !== JSON.stringify(record.reminders ?? {})) {
+      await store.setJSON(blob.key, { ...record, flightIds: canonicalFlightIds, reminders: canonicalReminders, vapidPublicKey: publicKey })
+    }
     const firedKeys = new Set(record.firedKeys ?? [])
     const delivery = { ...(record.delivery ?? {}) }
     let subscriptionRemoved = false
-    const reminderFlights = currentDayFlights.filter(flight => record.flightIds.includes(flight.id) && record.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(record.reminders[flight.id]) * 60_000)
-    const matchingFlights = changedFlights.filter(flight => record.flightIds.includes(flight.id))
+    const reminderFlights = currentDayFlights.filter(flight => normalizedRecord.flightIds.includes(flight.id) && normalizedRecord.reminders?.[flight.id] !== undefined && etaTimestamp(flight.eta) !== null && Date.now() >= (etaTimestamp(flight.eta) as number) - Number(normalizedRecord.reminders[flight.id]) * 60_000)
+    const matchingFlights = changedFlights.filter(flight => normalizedRecord.flightIds.includes(flight.id))
     const reminderIds = new Set(reminderFlights.map(flight => flight.id))
     const notificationFlights = [...reminderFlights, ...matchingFlights.filter(flight => !reminderIds.has(flight.id))]
     if (changedFlights.length > 0) {
-      console.log(`Subscription ${blob.key}: flightIds=${record.flightIds.join(', ') || 'none'}, matching=${matchingFlights.length}, firedKeys=${[...firedKeys].join(', ') || 'none'}`)
+      console.log(`Subscription ${blob.key}: flightIds=${normalizedRecord.flightIds.join(', ') || 'none'}, matching=${matchingFlights.length}, firedKeys=${[...firedKeys].join(', ') || 'none'}`)
     }
     for (const notificationFlight of notificationFlights) {
       let notificationId = `${notificationFlight.id}:notification`
@@ -175,7 +192,7 @@ export default async function handler() {
         console.error('Push notification failed', { key: blob.key, statusCode, error })
       }
     }
-    if (!subscriptionRemoved) await store.setJSON(blob.key, { ...record, firedKeys: [...firedKeys], delivery, vapidPublicKey: publicKey })
+    if (!subscriptionRemoved) await store.setJSON(blob.key, { ...record, flightIds: [...new Set((record.flightIds ?? []).map(id => normalizeStoredFlightId(String(id))))], reminders: Object.fromEntries(Object.entries(record.reminders ?? {}).map(([flightId, minutes]) => [normalizeStoredFlightId(String(flightId)), Number(minutes)])), firedKeys: [...firedKeys], delivery, vapidPublicKey: publicKey })
   }
   if (failed === 0) await store.setJSON('latest-flights', currentDayFlights)
   await store.delete(lockKey)

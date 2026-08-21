@@ -376,6 +376,17 @@ interface AlertNotification {
 
 const FLIGHTS_ENDPOINT = import.meta.env.PROD ? '/.netlify/functions/flights' : 'https://fis.com.mv/api/flights'
 
+function buildFlightId(flightNo: string, isArrival: boolean, serviceDate: string) {
+  return `${isArrival ? 'arrival' : 'departure'}-${flightNo.replace(/\s+/g, '')}-${serviceDate || 'unknown'}`
+}
+
+function normalizeStoredFlightId(id: string) {
+  if (!id) return id
+  const legacyMatch = id.match(/^(arrival|departure)-(.+)-([0-9]{4}-[0-9]{2}-[0-9]{2})-\d+$/i)
+  if (legacyMatch) return `${legacyMatch[1].toLowerCase()}-${legacyMatch[2].replace(/\s+/g, '')}-${legacyMatch[3]}`
+  return id
+}
+
 function normalizeFlights(payload: unknown): Flight[] {
   const source = Array.isArray(payload) ? payload : (payload as { flights?: unknown[]; data?: unknown[] } | null)?.flights ?? (payload as { data?: unknown[] } | null)?.data
   if (!Array.isArray(source)) return []
@@ -396,7 +407,7 @@ function normalizeFlights(payload: unknown): Flight[] {
     const serviceDate = String(flight.serviceDate ?? flight.flightDate ?? flight.scheduledDate ?? flight.date ?? '')
     return {
       // The upstream id embeds a positional index that shifts as flights complete; use a stable key instead.
-      id: `${isArrival ? 'arrival' : 'departure'}-${flightNo.replace(/\s+/g, '')}-${serviceDate || 'unknown'}`,
+      id: buildFlightId(flightNo, isArrival, serviceDate),
       flightNo,
       airline: String(flight.airline ?? flight.airlineCode ?? flight.operator ?? 'UNKNOWN'),
       aircraftType: String(flight.aircraftType ?? flight.aircraft_type ?? flight.aircraft ?? '---'),
@@ -492,14 +503,16 @@ async function syncPushSubscription(flightIds: Set<string>, reminders: Record<st
         userVisibleOnly: true,
         applicationServerKey: decodeVapidKey(publicKey),
       })
+    const normalizedIds = [...new Set([...flightIds].map(id => normalizeStoredFlightId(id)))]
+    const normalizedReminders = Object.fromEntries(Object.entries(reminders).map(([id, minutes]) => [normalizeStoredFlightId(id), minutes]))
     const saveResponse = await fetch('/.netlify/functions/push-subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ subscription: subscription.toJSON(), flightIds: [...flightIds], reminders, vapidPublicKey: publicKey }),
+      body: JSON.stringify({ subscription: subscription.toJSON(), flightIds: normalizedIds, reminders: normalizedReminders, vapidPublicKey: publicKey }),
     })
     if (!saveResponse.ok) throw new Error(`Push subscription save failed: ${saveResponse.status}`)
     localStorage.setItem('vapid-public-key', publicKey)
-    const meta = new Response(JSON.stringify({ flightIds: [...flightIds], reminders, vapidPublicKey: publicKey }))
+    const meta = new Response(JSON.stringify({ flightIds: normalizedIds, reminders: normalizedReminders, vapidPublicKey: publicKey }))
     const cache = await caches.open('push-subscription-meta')
     await cache.put('/push-subscription-meta', meta)
   } catch (error) {
@@ -539,7 +552,8 @@ function filterFlightsByDutyTime(flights: Flight[], dutyTime: DutyTime): Flight[
 function readFollowedFlightIds() {
   try {
     const value = JSON.parse(localStorage.getItem('followed-flight-ids') ?? '[]')
-    return new Set<string>(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [])
+    const ids = Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
+    return new Set<string>(ids.map(id => normalizeStoredFlightId(id)))
   } catch {
     return new Set<string>()
   }
@@ -549,7 +563,10 @@ function readFollowedFlights() {
   try {
     const value = JSON.parse(localStorage.getItem('followed-flight-data') ?? '[]')
     if (!Array.isArray(value)) return []
-    return value.filter((flight): flight is Flight => Boolean(flight && typeof flight.id === 'string' && typeof flight.flightNo === 'string' && typeof flight.status === 'string'))
+    return value
+      .filter((flight): flight is Flight => Boolean(flight && typeof flight.id === 'string' && typeof flight.flightNo === 'string' && typeof flight.status === 'string'))
+      .map(flight => ({ ...flight, id: normalizeStoredFlightId(flight.id) }))
+      .filter((flight, index, arr) => arr.findIndex(candidate => candidate.id === flight.id) === index)
   } catch {
     return []
   }
