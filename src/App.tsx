@@ -441,6 +441,20 @@ function requestFlightNotifications(flight: Flight) {
 
 // Native OS notifications for updates/reminders are delivered by push (see flight-notifications.ts); these only add to the in-app list.
 
+function LoadingScreen() {
+  return (
+    <div className="loading-screen" role="status" aria-label="Loading Fuel Services">
+      <div className="loading-logo"><HexLogo size={76} animated /></div>
+      <div className="loading-title">FUEL SERVICES</div>
+      <div className="loading-track" aria-hidden="true">
+        <div className="loading-progress" />
+        <div className="loading-plane"><IconPlane active /></div>
+      </div>
+      <div className="loading-label">LOADING FLIGHT DATA</div>
+    </div>
+  )
+}
+
 function etaTimestamp(eta: string) {
   const match = eta.match(/^(\d{1,2}):(\d{2})$/)
   if (!match) return Number.isNaN(Date.parse(eta)) ? null : Date.parse(eta)
@@ -621,14 +635,26 @@ interface StaffUserWithPassword extends StaffUser {
 }
 
 const STAFF_USERS: StaffUserWithPassword[] = [
+  { rcNumber: '472', name: 'Hussain Zareer', password: 'Welcome123' },
+  { rcNumber: 'A-10606', name: 'Mohamed Nihaadh', password: 'Welcome123' },
+  { rcNumber: 'A-10607', name: 'Ahmed Shaheen', password: 'Welcome123' },
   { rcNumber: 'A-10608', name: 'Moosa Aiman', password: 'Welcome123' },
   { rcNumber: 'A-10609', name: 'Mohamed Shamikh Ahmed', password: 'Welcome123' },
   { rcNumber: 'A-10721', name: 'Abdul Qadir', password: 'Welcome123' },
+  { rcNumber: 'A-10739', name: 'Hussain Nasih', password: 'Welcome123' },
+  { rcNumber: 'A-10740', name: 'Mohamed Shareef', password: 'Welcome123' },
   { rcNumber: 'A-10785', name: 'Hassan Sammah', password: 'Welcome123' },
+  { rcNumber: 'A-1159', name: 'Shareef Ibrahim', password: 'Welcome123' },
+  { rcNumber: 'A-1361', name: 'Ahmed Adam', password: 'Welcome123' },
+  { rcNumber: 'A-2662', name: 'Ismail Ali', password: 'Welcome123' },
   { rcNumber: 'A-2708', name: 'Mohamed Ameez', password: 'Welcome123' },
+  { rcNumber: 'A-2709', name: 'Mohamed Jameel', password: 'Welcome123' },
   { rcNumber: 'A-3036', name: 'Ahmed Jumail', password: 'Welcome123' },
+  { rcNumber: 'A-3038', name: 'Munaz Ali', password: 'Welcome123' },
   { rcNumber: 'A-3046', name: 'Mohamed Ashhad', password: 'Welcome123' },
   { rcNumber: 'A-3047', name: 'Ali Ibrahim', password: 'Welcome123' },
+  { rcNumber: 'A-3052', name: 'Mohamed Imaad', password: 'Welcome123' },
+  { rcNumber: 'A-3054', name: 'Abdul Rahman', password: 'Welcome123' },
   { rcNumber: 'A-3162', name: 'Sam aan Moosa', password: 'Welcome123' },
   { rcNumber: 'A-3166', name: 'Tholal Mohamed', password: 'Welcome123' },
   { rcNumber: 'A-3287', name: 'Nafiu Jameel', password: 'Welcome123' },
@@ -642,15 +668,22 @@ const STAFF_USERS: StaffUserWithPassword[] = [
   { rcNumber: 'A-5384', name: 'Jazleen Jaufar', password: 'Welcome123' },
   { rcNumber: 'A-5438', name: 'Ahmed Ashfaq', password: 'Welcome123' },
   { rcNumber: 'A-5582', name: 'Abdulla Mushfiq', password: 'Welcome123' },
+  { rcNumber: 'A-5701', name: 'Ibrahim Ahmed Manik', password: 'Welcome123' },
+  { rcNumber: 'A-5728', name: 'Mohamed Ikleel', password: 'Welcome123' },
   { rcNumber: 'A-5811', name: 'Mohamed Maadhih', password: 'Welcome123' },
   { rcNumber: 'A-5989', name: 'Ahmed Jinaan', password: 'Welcome123' },
   { rcNumber: 'A-6102', name: 'Hussain Shinaan', password: 'Welcome123' },
+  { rcNumber: 'A-6133', name: 'Mohamed Fayaz', password: 'Welcome123' },
   { rcNumber: 'A-6155', name: 'Afsah Abdulla Adam', password: 'Welcome123' },
   { rcNumber: 'A-6252', name: 'Hassan Shahum', password: 'Welcome123' },
   { rcNumber: 'A-6422', name: 'Hassan Naajee', password: 'Welcome123' },
+  { rcNumber: 'A-6598', name: 'Ibrahim Iman', password: 'Welcome123' },
   { rcNumber: 'A-6600', name: 'Ibrahim Hamdhan', password: 'Welcome123' },
   { rcNumber: 'A-6606', name: 'Ahmed Azhan', password: 'Welcome123' },
+  { rcNumber: 'A-6746', name: 'Ali Rashaadh', password: 'Welcome123' },
   { rcNumber: 'A-6780', name: 'Hassan Abdulla', password: 'Welcome123' },
+  { rcNumber: 'A-6836', name: 'Ahmed Abdulla', password: 'Welcome123' },
+  { rcNumber: 'A-6980', name: 'Abdulla Ahmed', password: 'Welcome123' },
   { rcNumber: 'A-7000', name: 'Ahmed Alaf', password: 'Welcome123' },
   { rcNumber: 'A-7265', name: 'Rajwan Ibrahim', password: 'Welcome123' },
   { rcNumber: 'A-7271', name: 'Anoof Shareef', password: 'Welcome123' },
@@ -667,14 +700,21 @@ const STAFF_USERS: StaffUserWithPassword[] = [
   { rcNumber: 'A-8276', name: 'Hassan Ashfag Mohamed', password: 'Welcome123' },
   { rcNumber: 'A-8288', name: 'Mohamed Shaikhan Shiham', password: 'Welcome123' },
   { rcNumber: 'A-8369', name: 'Ahmed Ibrahim', password: 'Welcome123' },
+  { rcNumber: 'A-8387', name: 'Ismail Adam', password: 'Welcome123' },
   { rcNumber: 'A-8581', name: 'Ali Muneef', password: 'Welcome123' },
+  { rcNumber: 'A-8633', name: 'Ismail Waheed', password: 'Welcome123' },
   { rcNumber: 'A-8724', name: 'Ali Aleef', password: 'Welcome123' },
+  { rcNumber: 'A-8810', name: 'Mohamed Shahum', password: 'Welcome123' },
+  { rcNumber: 'A-9012', name: 'Mohamed Faathih', password: 'Welcome123' },
   { rcNumber: 'A-9043', name: 'Nishan Shakir', password: 'Welcome123' },
+  { rcNumber: 'A-9116', name: 'Eejaz Rasheed', password: 'Welcome123' },
   { rcNumber: 'A-9117', name: 'Ahmed Tholaal', password: 'Welcome123' },
   { rcNumber: 'A-9168', name: 'Ali Sinaan', password: 'Welcome123' },
-  { rcNumber: 'A-10017', name: 'Ahunaf Shareef', password: 'Welcome123' },
   { rcNumber: 'A-10985', name: 'Ibrahim Sabooh Salah', password: 'Welcome123' },
   { rcNumber: 'A-10984', name: "Iz'aan Shaukath", password: 'Welcome123' },
+  { rcNumber: 'A-10017', name: 'Ahunaf Shareef', password: 'Welcome123' },
+  { rcNumber: 'A-2852', name: 'Abdullah Shareef', password: 'Welcome123' },
+  { rcNumber: 'A-7346', name: 'Rifaau Rasheed', password: 'Welcome123' },
 ]
 
 // ── Login Screen ─────────────────────────────────────────────────────────────
@@ -2042,7 +2082,7 @@ function AppShell({ onSignOut, user }: { onSignOut: () => void; user: StaffUser 
           border: `1px solid ${colors.border}`,
           borderRadius: '18px',
           flexShrink: 0,
-          margin: '0 10px 10px',
+          margin: '0 10px calc(22px + env(safe-area-inset-bottom, 0px))',
           paddingBottom: 'calc(8px + env(safe-area-inset-bottom, 0px))',
           boxShadow: '0 10px 30px rgba(0,0,0,0.22)',
         }}
@@ -2151,11 +2191,31 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('auth-user') ?? 'null') as StaffUser | null }
     catch { return null }
   })
+  const [startupLoading, setStartupLoading] = useState(() => user === null)
   const updateAvailable = useAppUpdateAvailable()
+
+  useEffect(() => {
+    if (user !== null || !startupLoading) return
+    let cancelled = false
+    const waitForStartup = async () => {
+      const wait = (promise: Promise<unknown>) => Promise.race([promise, new Promise(resolve => setTimeout(resolve, 1500))])
+      const tasks: Promise<unknown>[] = [
+        fetch(FLIGHTS_ENDPOINT, { cache: 'no-store' }).catch(() => undefined),
+      ]
+      if ('serviceWorker' in navigator) tasks.push(wait(navigator.serviceWorker.ready))
+      await Promise.all(tasks)
+      await new Promise(resolve => setTimeout(resolve, 1400))
+      if (!cancelled) setStartupLoading(false)
+    }
+    void waitForStartup()
+    return () => { cancelled = true }
+  }, [startupLoading, user])
 
   return (
     <>
-      {user === null
+      {startupLoading
+        ? <LoadingScreen />
+        : user === null
         ? <LoginScreen onLogin={authenticatedUser => { setUser(authenticatedUser); localStorage.setItem('auth-user', JSON.stringify(authenticatedUser)) }} />
         : <AppShell user={user} onSignOut={() => { setUser(null); localStorage.removeItem('auth-user') }} />}
       <UpdatePrompt show={updateAvailable} />
